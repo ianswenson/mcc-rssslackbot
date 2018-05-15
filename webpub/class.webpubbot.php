@@ -58,7 +58,6 @@ class WebPubSlackBot extends SlackBot
   );
 
 
-
   /**
    *
    */
@@ -194,6 +193,9 @@ class WebPubSlackBot extends SlackBot
    */
   protected function build_slack_attachment( $story )
   {
+    // Store CUE URL since it's used twice
+    $cue = $this->cue_url( $story['id'] );
+
     $attachment = array(
       'fallback'   => $story['headline'],
       'title'      => $story['headline'],
@@ -202,7 +204,7 @@ class WebPubSlackBot extends SlackBot
       'fields'     => array(
         array(
           'title' => 'ID',
-          'value' => $story['id'],
+          'value' => "<{$cue}|{$story['id']}>",
           'short' => true
         ),
         array(
@@ -221,7 +223,39 @@ class WebPubSlackBot extends SlackBot
           'short' => true
         ),
       ),
+      'actions'   => array(
+        array(
+          'type'  => 'button',
+          'text'  => 'Facebook',
+          'url'   => $this->facebook_share_url( $story['url'] ),
+        ),
+        array(
+          'type'  => 'button',
+          'text'  => 'Twitter',
+          'url'   => $this->twitter_share_url( $story['url'], $story['headline'] ),
+        ),
+        array(
+          'type'  => 'button',
+          'text'  => 'Reddit',
+          'url'   => $this->reddit_share_url( $story['url'] ),
+        ),
+        array(
+          'type'  => 'button',
+          'text'  => 'CUE',
+          'url'   => $cue,
+        ),
+      ),
     );
+
+    // Add chartbeat link
+    $chartbeat = $this->chartbeat_url( $story['url'] );
+    if ( $chartbeat ) {
+      $attachment['actions'][] = array(
+        'type'  => 'button',
+        'text'  => 'Chartbeat',
+        'url'   => $chartbeat,
+      );
+    }
 
     return $attachment;
   }
@@ -410,6 +444,72 @@ class WebPubSlackBot extends SlackBot
     }
 
     return $bylines;
+  }
+
+
+
+  /**
+   *
+   */
+  protected function cue_url( $id )
+  {
+    return "https://cue.misitemgr.com/#/main?uri=https:%2F%2Fcue-webservice.misitemgr.com%2Fwebservice%2Fescenic%2Fcontent%2F{$id}&mimetype=x-ece%2Fstory";
+  }
+
+
+
+  /**
+   *
+   */
+  protected function chartbeat_url( $story_url )
+  {
+    preg_match_all( '/https?:\/\/www\.(([^\.]+).+)/', $story_url, $matches, PREG_PATTERN_ORDER );
+
+    if ( !isset( $matches[1] ) || !isset( $matches[2] ) ) {
+      return false;
+    }
+
+    return "https://chartbeat.com/publishing/dashboard/{$matches[2][0]}.com/#path=" . urlencode( $matches[1][0] );
+  }
+
+
+
+  /**
+   *
+   */
+  protected function facebook_share_url( $story_url )
+  {
+    return "https://www.facebook.com/sharer/sharer.php?u={$story_url}";
+  }
+
+
+
+  /**
+   *
+   */
+  protected function twitter_share_url( $story_url, $title )
+  {
+    return 'https://twitter.com/share?text=' . urlencode( $title ) . "&url={$story_url}";
+  }
+
+
+
+  /**
+   *
+   */
+  protected function reddit_share_url( $story_url )
+  {
+    return "https://www.reddit.com/submit?url={$story_url}";
+  }
+
+
+
+  /**
+   *
+   */
+  protected function linkedin_share_url( $story_url, $title )
+  {
+    return "https://www.linkedin.com/shareArticle?mini=true&url={$story_url}&title=" . urlencode( $title );
   }
 
 
