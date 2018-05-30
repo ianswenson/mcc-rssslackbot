@@ -1,6 +1,7 @@
 <?php
 
 defined( 'DS' ) or define( 'DS', DIRECTORY_SEPARATOR );
+defined( 'WEBPUB_PATH') or define( 'WEBPUB_PATH', dirname(__FILE__) . DS );
 defined( 'INCL_PATH' ) or define( 'INCL_PATH', dirname(dirname(__FILE__)) . DS );
 
 include_once( INCL_PATH . 'class.meekrodb.php' );
@@ -16,38 +17,22 @@ include_once( INCL_PATH . 'class.slackbot.php' );
  */
 class WebPubSlackBot extends SlackBot
 {
-  protected $feeds = array(
-    'business'            => 'http://www.thenewstribune.com/news/business/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'entertainment'       => 'http://www.thenewstribune.com/entertainment/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'living'              => 'http://www.thenewstribune.com/living/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'local'               => 'http://www.thenewstribune.com/news/local/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'outdoors'            => 'http://www.thenewstribune.com/outdoors/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'politics-government' => 'http://www.thenewstribune.com/news/politics-government/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'sports'              => 'http://www.thenewstribune.com/sports/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    'weather'             => 'http://www.thenewstribune.com/news/weather/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-    // 'opinion'             => 'http://www.thenewstribune.com/opinion/?widgetName=rssfeed&widgetContentId=%d&getXmlFeed=true',
-  );
+  protected $folder    = '';
+  protected $rss_files = array();
 
   protected $byline_whitelist = array(
-    'thenewstribune',
-    'theolympian',
-    'staff reports',
-    'staff report',
-    'staff',
-    'contributing writer',
-    'seattle times',
-    'kiro',
+    'LIST_OF',
+    'WHITELISTED',
+    'BYLINES',
   );
 
   protected $url_blacklist = array(
-    'Community',
+    'BLACKLISTED URL PARTS',
   );
 
-  protected $is_fulltext         = false;
-  protected $fulltext_content_id = 'FULLTEXT_CONTENT_ID';
-  protected $public_content_id   = 712015;
-  protected $before_date         = '2017-10-12';
+  protected $before_date         = '2018-05-30';
   protected $stories             = array();
+  protected $color               = '#0000FF';
 
   protected $db;
   protected $database = array(
@@ -61,7 +46,7 @@ class WebPubSlackBot extends SlackBot
   /**
    *
    */
-  function __construct( $is_fulltext = false, $channel = null )
+  function __construct( $folder = null, $channel = null, $init = false )
   {
     date_default_timezone_set( 'America/Los_Angeles' );
 
@@ -71,9 +56,13 @@ class WebPubSlackBot extends SlackBot
       parent::__construct( 'rosie', $channel );
     }
 
-    $this->set_is_fulltext( $is_fulltext );
+    if ( !is_null($folder) ) {
+      $this->set_folder( $folder );
 
-    $this->init();
+      if ( $init ) {
+        $this->init();
+      }
+    }
   }
 
 
@@ -83,21 +72,36 @@ class WebPubSlackBot extends SlackBot
    */
   public function init()
   {
+    if ( empty( $this->folder ) || !is_string( $this->folder ) ) {
+      $this->error( 'Invalid folder name' );
+    }
+
     $this->connect();
 
-    foreach ( $this->feeds as $name => $url ) {
-      $feed = $this->get_rss_feed( $name );
+    $this->get_rss_files();
 
-      /**
-       * @todo  Check last updated
-       */
-
-      $this->find_stories( $feed );
+    foreach ( $this->rss_files as $rss_file ) {
+      $this->find_nodes( $rss_file );
     }
 
     if ( !empty( $this->stories ) ) {
-      $this->slack_stories();
-      $this->log_stories();
+      $this->debug($this->stories);
+      // $this->slack_stories();
+      // $this->log_stories();
+    }
+
+    $this->db->disconnect();
+  }
+
+
+
+  /**
+   *
+   */
+  public function set_folder( $name )
+  {
+    if ( !empty($name) && is_string($name) ) {
+      $this->folder = $name;
     }
   }
 
@@ -106,10 +110,58 @@ class WebPubSlackBot extends SlackBot
   /**
    *
    */
-  public function set_is_fulltext( $is_fulltext = false )
+  public function set_whitelist( $whitelist )
   {
-    if ( is_bool( $is_fulltext ) ) {
-      $this->is_fulltext = $is_fulltext;
+    if ( !empty($whitelist) && is_array($whitelist) ) {
+      $this->byline_whitelist = $whitelist;
+    }
+  }
+
+
+
+  /**
+   *
+   */
+  public function set_blacklist( $blacklist )
+  {
+    if ( !empty($blacklist) && is_array($blacklist) ) {
+      $this->url_blacklist = $blacklist;
+    }
+  }
+
+
+
+  /**
+   *
+   */
+  public function set_database( $database )
+  {
+    if ( !empty($database) && is_string($database) ) {
+      $this->database['database'] = $database;
+    }
+  }
+
+
+
+  /**
+   *
+   */
+  public function set_color( $color )
+  {
+    if ( !empty($color) && is_string($color) ) {
+      $this->color = $color;
+    }
+  }
+
+
+
+  /**
+   *
+   */
+  public function set_before_date( $date )
+  {
+    if ( !empty($date) && is_string($date) ) {
+      $this->before_date = date( 'Y-m-d', strtotime($date) );
     }
   }
 
@@ -124,25 +176,40 @@ class WebPubSlackBot extends SlackBot
   }
 
 
+
   /**
    *
    */
-  protected function find_stories( $feed_obj )
+  protected function find_nodes( $rss_file )
   {
-    if ( is_object($feed_obj) && isset( $feed_obj->channel ) && isset( $feed_obj->channel->item ) ) {
-      foreach ( $feed_obj->channel->item as $item ) {
+    $xmlReader = new XMLReader();
+    $xmlReader->open( $rss_file['filename'] );
 
-        $dc = $item->children( 'http://dublincore.org/documents/dcmi-terms/' );
+    while ( $xmlReader->read() && $xmlReader->name !== 'item' );
 
-        if ( $this->is_whitelisted( $dc->creator ) ) {
+    while( $xmlReader->name == 'item' ) {
+      $this->find_stories( $xmlReader->readOuterXML() );
+      $xmlReader->next('item');
+    }
 
-          $id = $this->parse_article_id( $item->link );
+    $xmlReader->close();
+  }
 
-          if ( $this->is_new_id( $id ) ) {
-            $this->add_new_story( $item, $dc->creator, $id );
-          }
-        }
 
+  /**
+   *
+   */
+  protected function find_stories( $xml )
+  {
+    $item = new SimpleXMLElement( $xml );
+    $dc   = $item->children( 'http://dublincore.org/documents/dcmi-terms/' );
+
+    if ( $this->is_whitelisted( $dc->creator ) ) {
+
+      $id = $this->parse_article_id( $item->link );
+
+      if ( $this->is_new_id( $id ) ) {
+        $this->add_new_story( $item, $dc->creator, $id );
       }
     }
   }
@@ -200,7 +267,7 @@ class WebPubSlackBot extends SlackBot
       'fallback'   => $story['headline'],
       'title'      => $story['headline'],
       'title_link' => $story['url'],
-      'color'      => '#21d1ff',
+      'color'      => $this->color,
       'fields'     => array(
         array(
           'title' => 'ID',
@@ -271,7 +338,6 @@ class WebPubSlackBot extends SlackBot
 
       $data = array(
         'id'         => $story['id'],
-        'section_id' => $story['section'],
         'headline'   => $this->convert_smart_quotes( $story['headline'] ),
         'byline'     => $this->clean_byline( $story['byline'] ),
         'pub_date'   => date( 'Y-m-d H:i:s', $story['date'] ),
@@ -285,15 +351,39 @@ class WebPubSlackBot extends SlackBot
 
 
   /**
-   *
+   * Finds CSV files in folder
    */
-  protected function get_rss_feed( $feed )
+  public function get_rss_files()
   {
-    $content_id = ( $this->is_fulltext ) ? $this->fulltext_content_id : $this->public_content_id;
+    $files = array();
+    $path  = WEBPUB_PATH . $this->folder;
 
-    $url = sprintf( $this->feeds[$feed], $content_id );
+    if ( $handle = opendir($path) ) {
 
-    return $this->get_feed( $url );
+      while ( ($file = readdir($handle)) !== false ) {
+        if ( $file != "." && $file != ".." ) {
+
+          $file = $path . DS . $file;
+          $info = pathinfo( $file );
+
+          // Check if file exists and if file is RSS
+          if ( file_exists($file) && isset( $info['extension'] ) && in_array( $info['extension'], array( 'rss' ) ) ) {
+            $files[$info['filename']] = array(
+              'filename' => $file,
+              'name'     => $info['filename']
+            );
+          }
+        }
+      }
+
+      closedir( $handle );
+    }
+
+
+    // Sort by name
+    ksort( $files );
+
+    $this->rss_files = $files;
   }
 
 
@@ -582,11 +672,6 @@ class WebPubSlackBot extends SlackBot
   }
 
 
-
-
 }
-
-
-$slackbot = new WebPubSlackBot();
 
 ?>
